@@ -256,6 +256,178 @@ class ToolTest(unittest.TestCase):
         self.assertEqual(october["previous_reflection"]["intention"], "regar cada 3 días")
         self.assertIsNone(october["previous_reflection"]["went_well"])
 
+    # -- notes (0.2) -----------------------------------------------------------------------
+    def note(self, day: str, kind: str, text: str, now: str | None = None, code: int = 0) -> dict:
+        return self.tool("note", "--date", day, "--type", kind, "--text", text, "--by", BY,
+                         now=now or f"{day}T21:00", code=code)
+
+    def test_setup_creates_default_note_types_once(self):
+        types = self.tool("note-types")["note_types"]
+        self.assertEqual([(t["symbol"], t["key"]) for t in types],
+                         [("–", "note_type:note"), ("○", "note_type:event"), ("!", "note_type:idea"),
+                          ("*", "note_type:important"), ("•", "note_type:task")])
+        self.tool("note-type", "--key", "idea", "--name", "Ocurrencia", "--symbol", "¡", "--by", BY)
+        self.assertEqual(self.tool("setup", "--by", BY)["note_types_created"], [])
+        idea = next(t for t in self.tool("note-types")["note_types"] if t["key"] == "note_type:idea")
+        self.assertEqual((idea["name"], idea["symbol"]), ("Ocurrencia", "¡"))
+
+    def test_note_types_are_the_owners(self):
+        made = self.tool("note-type", "--key", "gratitude", "--name", "Gratitud", "--symbol", "♡",
+                         "--purpose", "algo por lo que estoy agradecido", "--by", BY)
+        self.assertTrue(made["created"])
+        self.tool("note-type", "--key", "x", "--name", "X", "--symbol", "♡", "--purpose", "p", "--by", BY, code=2)
+        self.tool("note-type", "--key", "y", "--name", "Y", "--by", BY, code=2)        # symbol and purpose needed
+        self.tool("note-type", "--key", "task", "--state", "retired", "--by", BY)
+        self.note("2026-09-01", "task", "llamar al plomero", code=2)
+        self.assertEqual(self.note("2026-09-01", "♡", "la comida con mi mamá")["notes"][0]["type"], "Gratitud")
+
+    def test_notes_idempotent_search_retype_and_unnote(self):
+        first = self.note("2026-09-01", "event", "Fue la boda de mi primo en Guanajuato")["notes"][0]
+        self.assertTrue(first["created"])
+        again = self.note("2026-09-01", "note", "fue la boda de mi  primo en guanajuato")["notes"][0]
+        self.assertTrue(again["unchanged"])
+        self.assertIn("retype", again["message"])
+        self.note("2026-09-02", "idea", "Un jardín vertical")
+        found = self.tool("notes", "--search", "JARDIN vertical")
+        self.assertEqual((found["total"], found["notes"][0]["symbol"]), (1, "!"))
+        self.assertEqual(self.tool("notes", "--type", "○")["total"], 1)
+        self.assertEqual(self.tool("notes", "--month", "2026-09")["total"], 2)
+        moved = self.tool("retype", "--key", first["key"], "--type", "important", "--by", BY)
+        self.assertEqual(moved["symbol"], "*")
+        self.assertEqual(self.tool("notes", "--date", "2026-09-01")["notes"][0]["type"], "Important")
+        gone = self.tool("unnote", "--key", moved["key"], "--reason", "me equivoqué", "--by", BY)
+        self.assertIn("stays in the memory file", gone["note"])
+        self.assertEqual(self.tool("notes", "--date", "2026-09-01")["total"], 0)
+        self.tool("unnote", "--key", moved["key"], "--reason", "x", "--by", BY, code=2)
+
+    def test_notes_refusals_and_bulk(self):
+        self.note("2026-09-05", "note", "x", now="2026-09-02T09:00", code=2)     # future
+        self.note("2026-09-01", "nothing", "x", code=2)
+        self.note("2026-09-01", "note", "   ", code=2)
+        self.note("2026-09-01", "note", "a" * 4001, code=2)
+        path = Path(self.tmp.name) / "notes.json"
+        path.write_text(json.dumps([{"type": "event", "text": "Viaje a Oaxaca"}, {"type": "idea", "text": "Huerto"},
+                                    {"type": "event", "text": "Viaje a Oaxaca"}], ensure_ascii=False), encoding="utf-8")
+        bulk = self.tool("note", "--date", "2026-09-03", "--file", str(path), "--by", BY, now="2026-09-03T20:00")
+        self.assertEqual(len(bulk["notes"]), 2)
+        path.write_text('{"type": "idea"}', encoding="utf-8")
+        self.tool("note", "--file", str(path), "--by", BY, code=2)
+
+    def test_notes_count_as_writing_and_show_in_the_day(self):
+        self.trackers()
+        self.note("2026-09-01", "note", "Día tranquilo")
+        self.note("2026-09-02", "note", "Llovió", now="2026-09-04T09:00")
+        writing = self.tool("stats", "--month", "2026-09", now="2026-09-04T10:00")["writing"]
+        self.assertEqual((writing["written"], writing["on_the_day"], writing["filled_in_later"]), (2, 1, 1))
+        day = self.tool("day", "--date", "2026-09-01", now="2026-09-04T10:00")
+        self.assertEqual(day["notes"][0]["text"], "Día tranquilo")
+
+    # -- collections (0.2) ------------------------------------------------------------------
+    def books(self):
+        return self.tool("collection", "--key", "books", "--name", "Libros", "--statuses", "por leer, leyendo, leído",
+                         "--done", "leído", "--rating", "yes", "--by", BY, "--source", "quiero llevar mis libros")
+
+    def item(self, *args: str, now: str = "2026-09-10T09:00", code: int = 0) -> dict:
+        return self.tool("item", "--collection", "books", *args, "--by", BY, now=now, code=code)
+
+    def test_collection_definition_and_refusals(self):
+        self.assertEqual(self.books()["statuses"], ["por leer", "leyendo", "leído"])
+        self.tool("collection", "--key", "x", "--name", "X", "--statuses", "a", "--done", "a", "--by", BY, code=2)
+        self.tool("collection", "--key", "x", "--name", "X", "--statuses", "a, b", "--done", "c", "--by", BY, code=2)
+        self.tool("collection", "--key", "x", "--name", "X", "--done", "a", "--by", BY, code=2)
+        ideas = self.tool("collection", "--key", "ideas", "--name", "Ideas de negocio", "--by", BY)
+        self.assertEqual((ideas["statuses"], ideas["rating"]), ([], False))
+        self.item("--title", "Rayuela")
+        self.item("--key", "item:books-rayuela", "--status", "leyendo")
+        self.tool("collection", "--key", "books", "--statuses", "pendiente, leído", "--done", "leído", "--by", BY,
+                  code=2)                                           # Rayuela would be left with a lost status
+        names = [c["name"] for c in self.tool("collections")["collections"]]
+        self.assertEqual(names, ["Libros", "Ideas de negocio"])
+
+    def test_items_status_finish_date_rating_and_counts(self):
+        self.books()
+        added = self.item("--title", "Cien años de soledad")
+        self.assertEqual((added["status"], added["added_on"]), ("por leer", "2026-09-10"))
+        self.assertTrue(self.item("--title", "cien años de soledad")["unchanged"])
+        done = self.item("--title", "Cien años de soledad", "--status", "Leido", "--rating", "5", now="2026-09-20T09:00")
+        self.assertEqual((done["status"], done["finished_on"], done["rating"], done["finished"]),
+                         ("leído", "2026-09-20", "5/5", True))
+        self.item("--title", "Pedro Páramo", "--status", "leído", "--date", "2026-08-30", "--rating", "4")
+        self.item("--title", "Rayuela", "--status", "leyendo")
+        self.item("--title", "Rayuela", "--date", "2026-09-01", code=2)        # a date only with the finished status
+        self.item("--title", "Rayuela", "--rating", "6", code=2)
+        self.item("--title", "Rayuela", "--status", "abandonado", code=2)
+        self.item("--title", "Ficciones", "--status", "leído", "--date", "2026-09-30", now="2026-09-20T09:00", code=2)
+        september = self.tool("items", "--collection", "books", "--month", "2026-09", now="2026-09-21T09:00")
+        self.assertEqual([i["title"] for i in september["items"]], ["Cien años de soledad"])
+        year = self.tool("items", "--collection", "books", "--year", "2026", now="2026-09-21T09:00")
+        self.assertEqual(year["finished_in_period"]["count"], 2)
+        self.assertEqual(year["finished_in_period"]["average_rating"], "4.5/5")
+        self.assertEqual(year["by_status"], {"por leer": 0, "leyendo": 1, "leído": 2})
+        back = self.item("--title", "Cien años de soledad", "--status", "leyendo", now="2026-09-22T09:00")
+        self.assertIsNone(back["finished_on"])                         # no longer finished
+
+    def test_removed_items_stop_showing_and_can_come_back(self):
+        self.books()
+        self.item("--title", "Rayuela")
+        self.item("--title", "Rayuela", "--remove", "--reason", "ya no me interesa")
+        listing = self.tool("items", "--collection", "books")
+        self.assertEqual((listing["shown"], listing["items"]), (0, []))
+        self.assertEqual(self.tool("items", "--collection", "books", "--all")["items"][0]["removed"], True)
+        self.assertNotIn("removed", self.item("--title", "Rayuela"))
+        self.item("--title", "Nada", "--remove", code=2)
+
+    # -- reflection with notes and collections (0.2) -------------------------------------------
+    def test_reflection_brings_notes_collections_and_highlights(self):
+        self.books()
+        self.note("2026-09-03", "event", "Viaje a Oaxaca")
+        self.note("2026-09-15", "note", "Terminé el huerto")
+        self.item("--title", "Rayuela", "--status", "leído", now="2026-09-12T09:00")
+        data = self.tool("reflect", now="2026-10-01T09:00")
+        self.assertEqual(data["notes"]["total"], 2)
+        self.assertEqual(data["collections"], [{"collection": "Libros", "added": ["Rayuela"], "finished": ["Rayuela"]}])
+        self.assertEqual([n["text"] for n in data["month_notes"]], ["Viaje a Oaxaca", "Terminé el huerto"])
+        self.assertEqual(self.tool("brief", now="2026-10-01T09:00")["reflection_due"], "2026-09")   # notes count
+        self.tool("reflect", "--save", "--highlight", "Viaje a Oaxaca", "--highlight", "El huerto", "--by", BY,
+                  now="2026-10-01T09:30")
+        october = self.tool("reflect", "--month", "2026-10", now="2026-10-02T09:00")
+        self.assertEqual(october["previous_reflection"]["highlights"], ["Viaje a Oaxaca", "El huerto"])
+
+    # -- sharing a memory with todo, and moving a journal (0.2) ---------------------------------
+    def test_brief_says_whether_todo_is_here(self):
+        self.trackers()
+        self.assertFalse(self.tool("brief")["todo_here"])
+        subprocess.run([sys.executable, str(HELPER), "--db", self.db, "define-event-type", "--type", "task_captured",
+                        "--high-volume", "--by", BY], check=True, capture_output=True)
+        self.assertTrue(self.tool("brief")["todo_here"])
+
+    def test_copy_from_another_memory_is_exact_and_idempotent(self):
+        self.trackers()
+        self.books()
+        for i in range(1, 6):
+            self.log(f"2026-09-{i:02d}", f"sleep={400 + i * 10}", f"gym={'yes' if i % 2 else 'no'}")
+        self.note("2026-09-02", "event", "Viaje a Oaxaca")
+        self.note("2026-09-03", "idea", "Huerto", now="2026-09-05T09:00")
+        self.item("--title", "Rayuela", "--status", "leído", "--rating", "4")
+        self.tool("reflect", "--save", "--month", "2026-09", "--intention", "leer más", "--by", BY,
+                  now="2026-10-01T09:00")
+        target = str(Path(self.tmp.name) / "shared.sqlite")
+        subprocess.run([sys.executable, str(HELPER), "--db", target, "init", "--owner-name", "Test", "--owner-key", BY],
+                       check=True, capture_output=True)
+        run("setup", "--by", BY, db=target, test=self)
+        copied = run("copy-from", "--from-db", self.db, "--by", BY, db=target, now="2026-10-01T10:00", test=self)
+        self.assertEqual(copied["copied"], {"tracker": 4, "collection": 1, "item": 1, "tracker_logged": 10,
+                                            "note_written": 2, "month_reflected": 1})
+        again = run("copy-from", "--from-db", self.db, "--by", BY, db=target, now="2026-10-01T10:05", test=self)
+        self.assertEqual(again["copied"], {})
+        here = self.tool("stats", "--month", "2026-09", now="2026-10-01T11:00")
+        there = run("stats", "--month", "2026-09", db=target, now="2026-10-01T11:00", test=self)
+        self.assertEqual(here, there)
+        self.assertEqual(run("items", "--collection", "books", db=target, test=self)["items"][0]["rating"], "4/5")
+        run("copy-from", "--from-db", str(Path(self.tmp.name) / "nope.sqlite"), "--by", BY, db=target, code=2,
+            test=self)
+        run("copy-from", "--from-db", target, "--by", BY, db=target, code=2, test=self)
+
 
 class ContractTest(unittest.TestCase):
     def test_version(self):

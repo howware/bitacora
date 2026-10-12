@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.0
+
+- **Notes of the day**, in the owner's words, each with a type and its symbol. The types start as the bullet
+  journal's (– note, ○ event, ! idea, * important, • task) and are the owner's to rename, re-symbol, add or retire;
+  the agent chooses the type and the owner corrects it. Search without caring about accents or case. Removing a
+  note hides it; it stays in the memory file.
+- **Collections** the owner builds as they go (books, movies, ideas…): optional statuses with one that means
+  finished (it sets the finished date), optional 1–5 rating, counts and average rating per period.
+- **Shares a memory with `todo`:** `brief` says whether `todo` is there; things to do go to it, or become `•` notes
+  when it isn't. `copy-from` copies a whole journal from another memory, keeping its keys (running it twice
+  copies nothing new).
+- The monthly reflection adds the month's notes by type, what entered or was finished in each collection, and the
+  moments of the month: three proposed by the agent from the notes, chosen by the owner and saved.
+- Notes count as days written.
+- Updating: `setup` again (it keeps everything); `brief` says when it is needed. Seed version 2.
+
 ## 0.1.0 — first version
 
 - Protocol for habit trackers and a monthly reflection without an app, after a bullet journal's trackers and

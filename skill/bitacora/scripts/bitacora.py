@@ -11,7 +11,15 @@ Commands (JSON on stdout, diagnostics on stderr, documented exit codes):
   grid       the month as a text grid, one row per tracker plus the days written
   stats      compliance, streaks, averages, weekdays and coincidences for a month
   reflect    everything the monthly reflection needs; with --save, store the owner's answers
-  brief      start of session: today, the trackers, whether a monthly reflection is due
+  note       write notes of a day, each with its type (the bullet journal's signifiers), in the owner's words
+  notes      notes by date, month, type or text (accent- and case-insensitive)
+  retype     change a note's type;  unnote: void a note (it stops showing, and stays in the file)
+  note-type  create or change a type of note: name, symbol, what it is for, state
+  collection create or change a collection: its statuses, the one that means finished, whether it rates
+  item       add or change an element of a collection (status, rating, finished date, note), or remove it
+  items      a collection's elements with counts, by status, period or text;  collections: all of them
+  copy-from  copy everything bitacora keeps from another memory into this one, idempotently
+  brief      start of session: today, the trackers, whether a monthly reflection is due, whether todo is here
 
 Contract (howware spec §6): no network, no interactive prompts, idempotent writes, exact quantities as integers in
 the tracker's declared unit, dates at noon local time, refuse unsafe input with a clear error. Standard library only.
@@ -22,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import hashlib
 import json
 import os
 import re
@@ -34,7 +43,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 HERE = Path(__file__).resolve().parent
 SEED = HERE / "seed.json"
 MIN_MEMORY = (0, 4, 0)
@@ -44,6 +53,8 @@ OK, BAD_INPUT, MEMORY_ERROR = 0, 2, 3
 
 KINDS = ("quantity", "yesno", "scale")
 STATES = ("active", "retired")
+ITEM_STATES = ("active", "removed")
+MAX_NOTE = 4000
 YES = {"yes", "y", "si", "sí", "s", "1", "true"}
 NO = {"no", "n", "0", "false"}
 MAX_TEXT = 2000
@@ -178,6 +189,21 @@ def tracker_key(ref: str) -> str:
     return ref if ref.startswith("tracker:") else f"tracker:{slug(ref)}"
 
 
+def norm(text: str) -> str:
+    """Accent-, case- and spacing-insensitive form, for searching and for note keys."""
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return " ".join(text.casefold().split())
+
+
+def note_key(day: date, text: str) -> str:
+    """The same text on the same day is the same note, however it is spaced or capitalized."""
+    return f"NOTE_{day.strftime('%Y%m%d')}_{hashlib.sha256(norm(text).encode()).hexdigest()[:10]}"
+
+
+def cols(*names: str) -> list[str]:
+    return [x for c in names for x in ("--column", c)]
+
+
 def text_field(value: str | None, what: str) -> str | None:
     if value is None:
         return None
@@ -303,6 +329,10 @@ def goal_text(t: dict) -> str | None:
 
 
 # -- the journal: trackers and records, read once per command --------------------------------
+NOTE_TYPE_FACTS = ("note_symbol", "note_purpose", "note_state", "note_seq")
+COLLECTION_FACTS = ("coll_statuses", "coll_done_status", "coll_rating", "coll_state", "coll_seq", "coll_why")
+ITEM_FACTS = ("in_collection/key", "item_status", "item_rating", "item_done_on", "item_note", "item_state",
+              "item_added_on")
 TRACKER_FACTS = ("tracker_kind", "tracker_unit", "tracker_target", "tracker_target_value", "tracker_every",
                  "tracker_every_n", "tracker_state", "tracker_since", "tracker_until", "tracker_why", "tracker_seq")
 
@@ -310,19 +340,24 @@ TRACKER_FACTS = ("tracker_kind", "tracker_unit", "tracker_target", "tracker_targ
 class Journal:
     def __init__(self, mem: Memory, tz: timezone, today: date, as_of: date | None = None):
         self.mem, self.tz, self.today = mem, tz, today
-        cols = [x for f in ("key", "name", *(f"fact:{f}" for f in TRACKER_FACTS)) for x in ("--column", f)]
+        facts = lambda names: cols("key", "name", *(f"fact:{f}" for f in names))
         as_of_args = ("--as-of", datetime(as_of.year, as_of.month, as_of.day, 23, 59, 59, tzinfo=tz)
                       .isoformat(timespec="seconds")) if as_of else ()
-        settings, trackers, logs, reflections, then = mem.rows_many([
+        (settings, trackers, logs, reflections, then, note_types, notes, collections,
+         items) = mem.rows_many([
             ("--entity-type", "settings", "--where", "key = settings:bitacora", "--column", "key"),
-            ("--entity-type", "tracker", *cols),
-            ("--event-type", "tracker_logged", *[x for c in ("key", "occurred_at", "attr:tracker_value",
-                                                              "attr:late_days", "link:about_tracker/key")
-                                                  for x in ("--column", c)]),
-            ("--event-type", "month_reflected", *[x for c in ("key", "occurred_at", "attr:reflect_month",
-                                                               "attr:went_well", "attr:went_wrong", "attr:intention")
-                                                   for x in ("--column", c)]),
-            ("--entity-type", "tracker", *cols, *as_of_args) if as_of else ("--entity-type", "settings", "--column", "key")])
+            ("--entity-type", "tracker", *facts(TRACKER_FACTS)),
+            ("--event-type", "tracker_logged", *cols("key", "occurred_at", "attr:tracker_value", "attr:late_days",
+                                                     "link:about_tracker/key")),
+            ("--event-type", "month_reflected", *cols("key", "occurred_at", "attr:reflect_month", "attr:went_well",
+                                                      "attr:went_wrong", "attr:intention", "attr:highlights")),
+            ("--entity-type", "tracker", *facts(TRACKER_FACTS), *as_of_args) if as_of
+            else ("--entity-type", "settings", "--column", "key"),
+            ("--entity-type", "note_type", *facts(NOTE_TYPE_FACTS)),
+            ("--event-type", "note_written", *cols("key", "occurred_at", "attr:note_text", "attr:late_days",
+                                                   "link:of_note_type/key")),
+            ("--entity-type", "collection", *facts(COLLECTION_FACTS)),
+            ("--entity-type", "item", *facts(ITEM_FACTS))])
         if not settings:
             raise ToolError("This memory has no bitacora settings yet: run TOOL setup first.", MEMORY_ERROR)
         self.trackers: dict[str, dict] = {}
@@ -350,8 +385,27 @@ class Journal:
                                                       "went_well": r["attr:went_well"],
                                                       "went_wrong": r["attr:went_wrong"],
                                                       "intention": r["attr:intention"],
+                                                      "highlights": [h for h in (r["attr:highlights"] or "")
+                                                                     .split("\n") if h],
                                                       "saved_on": day_of(r["occurred_at"]).isoformat()}
                             for r in reflections}
+        self.note_types = {r["key"]: {"key": r["key"], "name": r["name"], "symbol": r["fact:note_symbol"],
+                                      "purpose": r["fact:note_purpose"], "state": r["fact:note_state"] or "active",
+                                      "seq": r["fact:note_seq"] or 0} for r in note_types}
+        self.notes = sorted(({"key": r["key"], "day": day_of(r["occurred_at"]), "text": r["attr:note_text"],
+                              "type": r["link:of_note_type/key"], "late": (r["attr:late_days"] or 0) > 0}
+                             for r in notes), key=lambda n: (n["day"], n["key"]))
+        self.collections = {r["key"]: {"key": r["key"], "name": r["name"],
+                                       "statuses": [x for x in (r["fact:coll_statuses"] or "").split("|") if x],
+                                       "done_status": r["fact:coll_done_status"],
+                                       "rating": bool(r["fact:coll_rating"]), "state": r["fact:coll_state"] or "active",
+                                       "seq": r["fact:coll_seq"] or 0, "why": r["fact:coll_why"]}
+                            for r in collections}
+        self.items = {r["key"]: {"key": r["key"], "title": r["name"], "collection": r["fact:in_collection/key"],
+                                 "status": r["fact:item_status"], "rating": r["fact:item_rating"],
+                                 "done_on": day_of(r["fact:item_done_on"]), "note": r["fact:item_note"],
+                                 "state": r["fact:item_state"] or "active", "added_on": day_of(r["fact:item_added_on"])}
+                      for r in items}
 
     def ordered(self, include_retired: bool = False) -> list[dict]:
         return sorted((t for t in self.trackers.values() if include_retired or t["state"] == "active"),
@@ -373,12 +427,75 @@ class Journal:
         return (start, end) if start <= end else None
 
     def written(self) -> dict[date, bool]:
-        """Days with at least one record → whether all of that day's records were written later."""
+        """Days with at least one record or note → whether everything of that day was written later."""
         days: dict[date, bool] = {}
         for recs in self.records.values():
             for day, r in recs.items():
                 days[day] = days.get(day, True) and r["late"]
+        for n in self.notes:
+            days[n["day"]] = days.get(n["day"], True) and n["late"]
         return days
+
+    # -- notes and collections ----------------------------------------------------------------
+    def note_type(self, ref: str) -> dict:
+        ref = ref.strip()
+        key = ref if ref.startswith("note_type:") else f"note_type:{slug(ref)}"
+        found = self.note_types.get(key) or next((t for t in self.note_types.values()
+                                                   if ref.casefold() in (t["name"].casefold(), t["symbol"])), None)
+        if not found:
+            names = ", ".join(f"{t['symbol']} {t['name']} ({t['key']})" for t in self.types()) or "none: run setup"
+            raise ToolError(f"There is no note type {ref!r}. Types: {names}.")
+        return found
+
+    def types(self, include_retired: bool = False) -> list[dict]:
+        return sorted((t for t in self.note_types.values() if include_retired or t["state"] == "active"),
+                      key=lambda t: (t["seq"], t["key"]))
+
+    def note_view(self, n: dict) -> dict:
+        t = self.note_types.get(n["type"], {})
+        return {"key": n["key"], "date": n["day"].isoformat(), "weekday": WEEKDAYS[n["day"].weekday()],
+                "symbol": t.get("symbol"), "type": t.get("name"), "text": n["text"],
+                **({"written_later": True} if n["late"] else {})}
+
+    def collection(self, ref: str) -> dict:
+        ref = ref.strip()
+        key = ref if ref.startswith("collection:") else f"collection:{slug(ref)}"
+        found = self.collections.get(key) or next((c for c in self.collections.values()
+                                                    if c["name"].casefold() == ref.casefold()), None)
+        if not found:
+            names = ", ".join(f"{c['name']} ({c['key']})" for c in self.ordered_collections()) or "none yet"
+            raise ToolError(f"There is no collection {ref!r}. Collections: {names}.")
+        return found
+
+    def ordered_collections(self, include_retired: bool = False) -> list[dict]:
+        return sorted((c for c in self.collections.values() if include_retired or c["state"] == "active"),
+                      key=lambda c: (c["seq"], c["key"]))
+
+    def item_view(self, i: dict) -> dict:
+        c = self.collections.get(i["collection"], {})
+        return {"item": i["key"], "title": i["title"], "collection": c.get("name"), "status": i["status"],
+                "finished": bool(i["status"]) and i["status"] == c.get("done_status"),
+                "rating": f"{i['rating']}/5" if i["rating"] else None,
+                "finished_on": i["done_on"].isoformat() if i["done_on"] else None, "note": i["note"],
+                "added_on": i["added_on"].isoformat() if i["added_on"] else None,
+                **({"removed": True} if i["state"] != "active" else {})}
+
+    def period_summary(self, first: date, last: date) -> dict:
+        """Notes by type and what entered or finished in each collection, in a period."""
+        notes = [n for n in self.notes if first <= n["day"] <= last]
+        by_type: dict[str, int] = {}
+        for n in notes:
+            t = self.note_types.get(n["type"], {})
+            label = f"{t.get('symbol', '?')} {t.get('name', n['type'])}"
+            by_type[label] = by_type.get(label, 0) + 1
+        colls = []
+        for c in self.ordered_collections(include_retired=True):
+            live = [i for i in self.items.values() if i["collection"] == c["key"] and i["state"] == "active"]
+            added = [i["title"] for i in live if i["added_on"] and first <= i["added_on"] <= last]
+            finished = [i["title"] for i in live if i["done_on"] and first <= i["done_on"] <= last]
+            if added or finished:
+                colls.append({"collection": c["name"], "added": added, "finished": finished})
+        return {"notes": {"total": len(notes), "by_type": by_type}, "collections": colls}
 
     # -- per tracker ------------------------------------------------------------------------
     def done_days(self, t: dict) -> list[date]:
@@ -580,8 +697,19 @@ def cmd_setup(mem: Memory, args, now: datetime) -> dict:
                        entities=seed["entities"])
     for event_type in seed["high_volume_event_types"]:
         mem.run("define-event-type", "--type", event_type, "--high-volume", "--by", args.by,
-                "--reason", "One per tracker and day: thousands per year")
-    return {"ok": True, "seed_version": seed["seed_version"], "warnings": result.get("warnings", [])}
+                "--reason", "Many per day: thousands per year")
+    j = Journal(mem, now.tzinfo, now.date())
+    created = []
+    if not j.note_types:
+        for seq, t in enumerate(seed["note_types"], 1):
+            mem.write(args.by, "bitacora default note types", "helper_command",
+                      entities=[{"key": t["key"], "type": "note_type", "name": t["name"]}],
+                      facts=[{"subject": t["key"], "predicate": p, "value": v, "valid_from": "now"}
+                             for p, v in (("note_symbol", t["symbol"]), ("note_purpose", t["purpose"]),
+                                          ("note_state", "active"), ("note_seq", seq))])
+            created.append(f"{t['symbol']} {t['name']}")
+    return {"ok": True, "seed_version": seed["seed_version"], "note_types_created": created,
+            "warnings": result.get("warnings", [])}
 
 
 def cmd_now(mem: Memory, args, now: datetime) -> dict:
@@ -728,7 +856,8 @@ def cmd_day(mem: Memory, args, now: datetime) -> dict:
         out.append({"tracker": t["key"], "name": t["name"], "value": show(t, r["value"]) if r else None,
                     "done": done(t, r["value"]) if r else None, "written_later": r["late"] if r else None})
     return {"ok": True, "date": day.isoformat(), "weekday": WEEKDAYS[day.weekday()], "entries": out,
-            "missing": [e["name"] for e in out if e["value"] is None]}
+            "missing": [e["name"] for e in out if e["value"] is None],
+            "notes": [j.note_view(n) for n in j.notes if n["day"] == day]}
 
 
 def month_of(args, now: datetime, default_previous: bool = False) -> tuple[str, date, date]:
@@ -757,7 +886,8 @@ def stats_for(mem: Memory, now: datetime, month: str, first: date, last: date) -
         if s["tracker"] in before:
             s["previous_month_compliance_percent"] = before[s["tracker"]]
     return {"journal": j, "month": month, "complete": last < now.date(), "trackers": trackers,
-            "writing": j.writing(first, last), "coincidences": j.coincidences(first, last),
+            "writing": j.writing(first, last), **j.period_summary(first, last),
+            "coincidences": j.coincidences(first, last),
             "coincidences_note": f"averages on days one tracker was done vs not done, with at least {MIN_SIDE} days "
                                  "on each side; they are coincidences in the record, not causes"}
 
@@ -772,11 +902,15 @@ def cmd_stats(mem: Memory, args, now: datetime) -> dict:
 def cmd_reflect(mem: Memory, args, now: datetime) -> dict:
     month, first, last = month_of(args, now, default_previous=True)
     if args.save:
+        highlights = [h for h in (text_field(h, "--highlight") for h in args.highlight or []) if h]
+        if any("\n" in h for h in highlights):
+            raise ToolError("A --highlight is one line; repeat --highlight for each moment.")
         fields = {"went_well": text_field(args.went_well, "--went-well"),
                   "went_wrong": text_field(args.went_wrong, "--went-wrong"),
-                  "intention": text_field(args.intention, "--intention")}
+                  "intention": text_field(args.intention, "--intention"),
+                  "highlights": "\n".join(highlights) or None}
         if not any(fields.values()):
-            raise ToolError("--save needs at least one of --went-well, --went-wrong, --intention.")
+            raise ToolError("--save needs at least one of --went-well, --went-wrong, --intention, --highlight.")
         j = Journal(mem, now.tzinfo, now.date())
         prev = j.reflections.get(month)
         key = f"REFLECT_{month.replace('-', '')}"
@@ -793,6 +927,7 @@ def cmd_reflect(mem: Memory, args, now: datetime) -> dict:
     return {"ok": True, **s, "grid": j.grid(first, last, args.lang),
             "previous_reflection": j.reflections.get(previous_month(first)),
             "already_reflected": j.reflections.get(month),
+            "month_notes": [j.note_view(n) for n in j.notes if first <= n["day"] <= last],
             "trackers_now": [tracker_view(j, t) for t in Journal(mem, now.tzinfo, now.date()).ordered()]}
 
 
@@ -803,20 +938,432 @@ def cmd_brief(mem: Memory, args, now: datetime) -> dict:
         if error.code != MEMORY_ERROR:
             raise
         return {"ok": True, "today": now.date().isoformat(), "setup_needed": True,
-                "message": "No memory or no bitacora settings here yet: start the memory, then TOOL setup."}
-    if not j.trackers:
-        return {"ok": True, "today": now.date().isoformat(), "empty": True}
+                "message": "No memory, no bitacora settings, or bitacora was updated: start the memory if there is "
+                           "none, then TOOL setup (it keeps the owner's data)."}
+    high_volume = (mem.run("event-types") or {}).get("high_volume", {})
+    todo_here = "task_captured" in high_volume
+    if not j.note_types:
+        return {"ok": True, "today": now.date().isoformat(), "setup_needed": True, "todo_here": todo_here,
+                "message": "bitacora was updated: run TOOL setup (it keeps the owner's data)."}
+    if not (j.trackers or j.notes or j.collections):
+        return {"ok": True, "today": now.date().isoformat(), "empty": True, "todo_here": todo_here}
     p_month = previous_month(now.date())
     pf, pl = parse_month(p_month)
-    existed = any(t["since"] and t["since"] <= pl and (not t["until"] or t["until"] > pf) for t in j.trackers.values())
+    existed = (any(t["since"] and t["since"] <= pl and (not t["until"] or t["until"] > pf)
+                   for t in j.trackers.values()) or any(pf <= n["day"] <= pl for n in j.notes))
     written = j.written()
     last = max(written, default=None)
     return {"ok": True, "today": now.date().isoformat(), "weekday": WEEKDAY_NAMES[now.weekday()],
             "trackers": [{"name": t["name"], "goal": goal_text(t),
                           "today": show(t, j.records.get(t["key"], {}).get(now.date(), {}).get("value")),
                           "streak": j.streak(t)} for t in j.ordered()],
-            "last_written": last.isoformat() if last else None,
+            "notes_today": sum(1 for n in j.notes if n["day"] == now.date()),
+            "collections": [c["name"] for c in j.ordered_collections()],
+            "last_written": last.isoformat() if last else None, "todo_here": todo_here,
             "reflection_due": p_month if existed and p_month not in j.reflections else None}
+
+
+# -- notes ----------------------------------------------------------------------------------------
+def read_json(path: str) -> Any:
+    try:
+        # bytes, so stdin is UTF-8 whatever the console's code page (Windows would read it as cp1252)
+        text = (sys.stdin.buffer.read() if path == "-" else Path(path).read_bytes()).decode("utf-8-sig")
+    except (OSError, UnicodeDecodeError) as error:
+        raise ToolError(f"Cannot read {path} as UTF-8 text: {getattr(error, 'strerror', None) or error}") from error
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ToolError(f"{path} is not JSON (line {error.lineno}: {error.msg}).") from error
+
+
+def note_text(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ToolError("Every note needs a non-empty text.")
+    value = value.strip()
+    if len(value) > MAX_NOTE:
+        raise ToolError(f"A note is {len(value)} characters; keep it under {MAX_NOTE} (split it).")
+    return value
+
+
+def cmd_note(mem: Memory, args, now: datetime) -> dict:
+    j = Journal(mem, now.tzinfo, now.date())
+    day = parse_day(args.date, "--date") if args.date else now.date()
+    if day > now.date():
+        raise ToolError(f"{day.isoformat()} hasn't happened yet: notes are for today or past days.")
+    if args.file:
+        raw = read_json(args.file)
+        if not isinstance(raw, list) or not all(isinstance(x, dict) for x in raw):
+            raise ToolError('--file is a JSON list: [{"type": "idea", "text": "..."}]')
+        wanted = [(x.get("type"), x.get("text")) for x in raw]
+    elif args.text is not None:
+        wanted = [(args.type, args.text)]
+    else:
+        raise ToolError("Give --type and --text, or --file with several notes.")
+    existing = {n["key"]: n for n in j.notes}
+    late = (now.date() - day).days
+    events, out, seen = [], [], set()
+    for type_ref, text in wanted:
+        if not type_ref:
+            raise ToolError("Every note needs a type (see TOOL note-types).")
+        t = j.note_type(type_ref)
+        if t["state"] != "active":
+            raise ToolError(f"The note type {t['name']} is retired.")
+        text = note_text(text)
+        key = note_key(day, text)
+        if key in seen:
+            continue
+        seen.add(key)
+        if key in existing:
+            prev = existing[key]
+            out.append({**j.note_view(prev), "unchanged": True,
+                        **({"message": "This note already exists with another type; to change it, TOOL retype."}
+                           if prev["type"] != t["key"] else {})})
+            continue
+        events.append({"key": key, "type": "note_written", "occurred_at": noon(day, now.tzinfo),
+                       "summary": f"{t['symbol']} {text[:150]}", "attributes": {"note_text": text, "late_days": late},
+                       "links": [{"predicate": "of_note_type", "entity": t["key"]}]})
+        out.append({"key": key, "date": day.isoformat(), "symbol": t["symbol"], "type": t["name"], "text": text,
+                    "created": True})
+    if events:
+        mem.write(args.by, args.source or f"Notes of {day.isoformat()}", events=events)
+    return {"ok": True, "date": day.isoformat(), "weekday": WEEKDAYS[day.weekday()], "late_days": late, "notes": out}
+
+
+def find_note(j: Journal, key: str) -> dict:
+    found = next((n for n in j.notes if n["key"] == key.strip()), None)
+    if not found:
+        raise ToolError(f"There is no note {key!r} (it may have been removed). Find it with TOOL notes.")
+    return found
+
+
+def cmd_retype(mem: Memory, args, now: datetime) -> dict:
+    j = Journal(mem, now.tzinfo, now.date())
+    n = find_note(j, args.key)
+    t = j.note_type(args.type)
+    if t["key"] == n["type"]:
+        return {"ok": True, "unchanged": True, **j.note_view(n)}
+    mem.run("void", "--event", n["key"], "--reason", args.source or f"Type changed to {t['name']}", "--by", args.by)
+    key = f"{note_key(n['day'], n['text'])}_t{now.strftime('%Y%m%d%H%M%S')}"
+    mem.write(args.by, args.source or f"Type changed to {t['name']}", events=[{
+        "key": key, "type": "note_written", "occurred_at": noon(n["day"], now.tzinfo),
+        "summary": f"{t['symbol']} {n['text'][:150]}",
+        "attributes": {"note_text": n["text"], "late_days": 1 if n["late"] else 0},
+        "links": [{"predicate": "of_note_type", "entity": t["key"]}]}])
+    return {"ok": True, "key": key, "date": n["day"].isoformat(), "symbol": t["symbol"], "type": t["name"],
+            "text": n["text"]}
+
+
+def cmd_unnote(mem: Memory, args, now: datetime) -> dict:
+    j = Journal(mem, now.tzinfo, now.date())
+    n = find_note(j, args.key)
+    mem.run("void", "--event", n["key"], "--reason", args.reason, "--by", args.by)
+    return {"ok": True, "removed": j.note_view(n),
+            "note": "It stops showing everywhere; it stays in the memory file, marked as voided, with the reason."}
+
+
+def cmd_notes(mem: Memory, args, now: datetime) -> dict:
+    j = Journal(mem, now.tzinfo, now.date())
+    notes = j.notes
+    if args.date:
+        day = parse_day(args.date, "--date")
+        notes = [n for n in notes if n["day"] == day]
+    if args.month:
+        first, last = parse_month(args.month)
+        notes = [n for n in notes if first <= n["day"] <= last]
+    if args.type:
+        t = j.note_type(args.type)
+        notes = [n for n in notes if n["type"] == t["key"]]
+    if args.search:
+        words = norm(args.search).split()
+        notes = [n for n in notes if all(w in norm(n["text"]) for w in words)]
+    total = len(notes)
+    notes = notes[-args.limit:] if args.limit else notes
+    return {"ok": True, "total": total, "shown": len(notes), "notes": [j.note_view(n) for n in notes]}
+
+
+def cmd_note_type(mem: Memory, args, now: datetime) -> dict:
+    j = Journal(mem, now.tzinfo, now.date())
+    key = args.key if args.key.startswith("note_type:") else f"note_type:{slug(args.key)}"
+    current = j.note_types.get(key)
+    if not current and not (args.name and args.symbol and args.purpose):
+        raise ToolError(f"New note type {key}: give it a --name, a --symbol and a --purpose (what it is for).")
+    symbol = args.symbol.strip() if args.symbol else None
+    if symbol is not None and not 1 <= len(symbol) <= 3:
+        raise ToolError("A --symbol is one to three characters.")
+    if symbol and any(t["symbol"] == symbol and t["key"] != key and t["state"] == "active" for t in j.note_types.values()):
+        raise ToolError(f"The symbol {symbol} is already used by another type.")
+    if args.state and args.state not in STATES:
+        raise ToolError(f"--state is {', '.join(STATES)}.")
+    entity = {"key": key, "type": "note_type", "name": (args.name or current["name"]).strip()}
+    if current and args.name and args.name.strip() != current["name"]:
+        entity["rename"] = True
+    facts = [(p, v) for p, v in (("note_symbol", symbol), ("note_purpose", text_field(args.purpose, "--purpose")),
+                                  ("note_state", args.state)) if v is not None]
+    if not current:
+        facts += [("note_state", "active"), ("note_seq", len(j.note_types) + 1)]
+    mem.write(args.by, args.source or f"Note type {entity['name']}", entities=[entity],
+              facts=[{"subject": key, "predicate": p, "value": v, "valid_from": "now"} for p, v in facts])
+    t = Journal(mem, now.tzinfo, now.date()).note_types[key]
+    return {"ok": True, "created": not current, **t}
+
+
+def cmd_note_types(mem: Memory, args, now: datetime) -> dict:
+    j = Journal(mem, now.tzinfo, now.date())
+    return {"ok": True, "note_types": j.types(args.all)}
+
+
+# -- collections --------------------------------------------------------------------------------------
+def parse_statuses(text: str) -> list[str]:
+    statuses = [x.strip() for x in text.split(",") if x.strip()]
+    if len(statuses) < 2 or len({norm(x) for x in statuses}) != len(statuses):
+        raise ToolError("--statuses is a comma-separated list of at least two different values, e.g. "
+                        '"to read, reading, read".')
+    if any("|" in x or len(x) > 40 for x in statuses):
+        raise ToolError("Each status is up to 40 characters, without '|'.")
+    return statuses
+
+
+def cmd_collection(mem: Memory, args, now: datetime) -> dict:
+    j = Journal(mem, now.tzinfo, now.date())
+    key = args.key if args.key.startswith("collection:") else f"collection:{slug(args.key)}"
+    current = j.collections.get(key)
+    if not current and not args.name:
+        raise ToolError(f"New collection {key}: give it a --name.")
+    statuses = parse_statuses(args.statuses) if args.statuses else (current["statuses"] if current else [])
+    done_status = args.done.strip() if args.done else (current["done_status"] if current else None)
+    if args.statuses == "none":
+        statuses, done_status = [], None
+    if statuses and done_status not in statuses:
+        raise ToolError(f"--done must be one of the statuses ({', '.join(statuses)}): the one that means finished.")
+    if not statuses and args.done:
+        raise ToolError("--done needs --statuses.")
+    if current:
+        orphans = sorted({i["title"] for i in j.items.values() if i["collection"] == key and i["state"] == "active"
+                          and i["status"] and i["status"] not in statuses})
+        if orphans:
+            raise ToolError(f"These items have a status that would no longer exist: {', '.join(orphans)}. "
+                            "Change their status first, or keep that status.")
+    if args.state and args.state not in STATES:
+        raise ToolError(f"--state is {', '.join(STATES)}.")
+    entity = {"key": key, "type": "collection", "name": (args.name or current["name"]).strip()}
+    if current and args.name and args.name.strip() != current["name"]:
+        entity["rename"] = True
+    facts: list[tuple[str, Any]] = []
+    if args.statuses:
+        facts += [("coll_statuses", "|".join(statuses) or None), ("coll_done_status", done_status)]
+    elif args.done:
+        facts.append(("coll_done_status", done_status))
+    if args.rating is not None:
+        if args.rating not in ("yes", "no"):
+            raise ToolError("--rating is yes or no.")
+        facts.append(("coll_rating", 1 if args.rating == "yes" else 0))
+    if args.why is not None:
+        facts.append(("coll_why", text_field(args.why, "--why")))
+    if args.state:
+        facts.append(("coll_state", args.state))
+    if not current:
+        facts += [("coll_seq", len(j.collections) + 1)] + ([] if args.state else [("coll_state", "active")])
+    sets = [{"subject": key, "predicate": p, "value": v, "valid_from": "now"} for p, v in facts if v is not None]
+    closes = [{"subject": key, "predicate": p, "at": "now", "if_present": True} for p, v in facts if v is None]
+    mem.write(args.by, args.source or f"Collection {entity['name']}", entities=[entity], facts=sets,
+              **({"close": closes} if closes else {}))
+    c = Journal(mem, now.tzinfo, now.date()).collections[key]
+    return {"ok": True, "created": not current, **c}
+
+
+def collection_counts(j: Journal, c: dict) -> dict:
+    live = [i for i in j.items.values() if i["collection"] == c["key"] and i["state"] == "active"]
+    by_status = {st: sum(1 for i in live if i["status"] == st) for st in c["statuses"]}
+    return {"total": len(live), **({"by_status": by_status} if c["statuses"] else {})}
+
+
+def cmd_collections(mem: Memory, args, now: datetime) -> dict:
+    j = Journal(mem, now.tzinfo, now.date())
+    return {"ok": True, "collections": [{**c, **collection_counts(j, c)} for c in j.ordered_collections(args.all)]}
+
+
+def cmd_item(mem: Memory, args, now: datetime) -> dict:
+    j = Journal(mem, now.tzinfo, now.date())
+    c = j.collection(args.collection)
+    if c["state"] != "active":
+        raise ToolError(f"The collection {c['name']} is retired.")
+    if args.key:
+        key = args.key
+        current = j.items.get(key)
+        if not current or current["collection"] != c["key"]:
+            raise ToolError(f"There is no item {key} in {c['name']}.")
+    else:
+        if not args.title or not args.title.strip():
+            raise ToolError("Give the item's --title (or its --key to change it).")
+        key = f"item:{c['key'].split(':', 1)[1]}-{slug(args.title)}"
+        current = j.items.get(key)
+    title = (args.title or current["title"]).strip()
+    if len(title) > 200:
+        raise ToolError("A title is up to 200 characters; put the rest in --note.")
+    entity = {"key": key, "type": "item", "name": title}
+    if current and args.title and title != current["title"] and args.key:
+        entity["rename"] = True
+    facts: list[tuple[str, Any]] = []
+    status = args.status.strip() if args.status else None
+    if status is not None:
+        if not c["statuses"]:
+            raise ToolError(f"{c['name']} has no statuses.")
+        match = next((x for x in c["statuses"] if norm(x) == norm(status)), None)
+        if not match:
+            raise ToolError(f"{status!r} is not a status of {c['name']}: {', '.join(c['statuses'])}.")
+        status = match
+        facts.append(("item_status", status))
+    finished_now = status is not None and status == c["done_status"]
+    was_finished = bool(current and current["status"] == c["done_status"] and c["done_status"])
+    if args.date:
+        day = parse_day(args.date, "--date")
+        if day > now.date():
+            raise ToolError("--date (when it was finished) can't be in the future.")
+        if not (finished_now or (was_finished and status is None)):
+            raise ToolError(f"--date is the day it was finished: it goes with --status {c['done_status']!r}.")
+        facts.append(("item_done_on", noon(day, now.tzinfo)))
+    elif finished_now and not was_finished:
+        facts.append(("item_done_on", noon(now.date(), now.tzinfo)))
+    elif status is not None and not finished_now and was_finished:
+        facts.append(("item_done_on", None))
+    if args.rating is not None:
+        if not c["rating"]:
+            raise ToolError(f"{c['name']} doesn't rate its items (TOOL collection --rating yes).")
+        if not 1 <= args.rating <= 5:
+            raise ToolError("--rating is 1 to 5.")
+        facts.append(("item_rating", args.rating))
+    if args.note is not None:
+        facts.append(("item_note", text_field(args.note, "--note")))
+    if args.remove:
+        if not current:
+            raise ToolError(f"There is no item {title!r} in {c['name']}.")
+        facts.append(("item_state", "removed"))
+    elif current and current["state"] != "active":
+        facts.append(("item_state", "active"))          # adding it again brings it back
+    if not current:
+        facts += [("in_collection", c["key"]), ("item_state", "active"),
+                  ("item_added_on", noon(now.date(), now.tzinfo))]
+        if c["statuses"] and status is None:
+            facts.append(("item_status", c["statuses"][0]))
+    if current and not facts and not entity.get("rename"):
+        return {"ok": True, "unchanged": True, **j.item_view(current)}
+    sets = [{"subject": key, "predicate": p, "value": v, "valid_from": "now"} for p, v in facts if v is not None]
+    closes = [{"subject": key, "predicate": p, "at": "now", "if_present": True} for p, v in facts if v is None]
+    mem.write(args.by, args.source or args.reason or f"{c['name']}: {title}", entities=[entity], facts=sets,
+              **({"close": closes} if closes else {}))
+    after = Journal(mem, now.tzinfo, now.date())
+    return {"ok": True, "created": not current, **after.item_view(after.items[key]),
+            "counts": collection_counts(after, after.collections[c["key"]])}
+
+
+def cmd_items(mem: Memory, args, now: datetime) -> dict:
+    j = Journal(mem, now.tzinfo, now.date())
+    c = j.collection(args.collection)
+    items = [i for i in j.items.values() if i["collection"] == c["key"] and (args.all or i["state"] == "active")]
+    if args.status:
+        items = [i for i in items if i["status"] and norm(i["status"]) == norm(args.status)]
+    period = None
+    if args.year or args.month:
+        if args.month:
+            first, last = parse_month(args.month)
+        else:
+            if not re.fullmatch(r"\d{4}", args.year):
+                raise ToolError("--year is YYYY.")
+            first, last = date(int(args.year), 1, 1), date(int(args.year), 12, 31)
+        period = (first, last)
+        items = [i for i in items if i["done_on"] and first <= i["done_on"] <= last]
+    if args.search:
+        words = norm(args.search).split()
+        items = [i for i in items if all(w in norm(f"{i['title']} {i['note'] or ''}") for w in words)]
+    items.sort(key=lambda i: (i["done_on"] or date.max, i["added_on"] or date.max, i["key"]))
+    out = {"ok": True, "collection": c["name"], "statuses": c["statuses"], "done_status": c["done_status"],
+           "shown": len(items), "items": [j.item_view(i) for i in items], **collection_counts(j, c)}
+    if period:
+        out["finished_in_period"] = {"from": period[0].isoformat(), "to": period[1].isoformat(), "count": len(items)}
+        rated = [i["rating"] for i in items if i["rating"]]
+        if rated:
+            out["finished_in_period"]["average_rating"] = f"{mean(rated)}/5"
+    return out
+
+
+# -- moving a journal into another memory --------------------------------------------------------------
+def cmd_copy_from(mem: Memory, args, now: datetime) -> dict:
+    """Copies trackers, records, reflections, note types, notes, collections and items from another memory.
+    Keys are kept, so copying twice changes nothing; what this memory already has is left as it is."""
+    source_db = Path(args.from_db)
+    if not source_db.is_file():
+        raise ToolError(f"{args.from_db} is not a memory file.")
+    if args.db and Path(args.db).resolve() == source_db.resolve():
+        raise ToolError("--from-db is this same memory.")
+    src = Journal(Memory(mem.helper, str(source_db)), now.tzinfo, now.date())
+    dst = Journal(mem, now.tzinfo, now.date())
+    entities, facts, events, copied = [], [], [], {}
+
+    def entity(key: str, kind: str, name: str, values: list[tuple[str, Any]]) -> None:
+        entities.append({"key": key, "type": kind, "name": name})
+        facts.extend({"subject": key, "predicate": p, "value": v, "valid_from": "now"} for p, v in values
+                     if v is not None)
+        copied[kind] = copied.get(kind, 0) + 1
+
+    at_noon = lambda d: noon(d, now.tzinfo) if d else None
+    for t in src.note_types.values():
+        if t["key"] not in dst.note_types and not any(x["symbol"] == t["symbol"] for x in dst.note_types.values()):
+            entity(t["key"], "note_type", t["name"], [("note_symbol", t["symbol"]), ("note_purpose", t["purpose"]),
+                                                      ("note_state", t["state"]), ("note_seq", t["seq"])])
+    type_map = {t["key"]: (t["key"] if t["key"] in dst.note_types or any(e["key"] == t["key"] for e in entities)
+                           else next(x["key"] for x in dst.note_types.values() if x["symbol"] == t["symbol"]))
+                for t in src.note_types.values()}
+    for t in src.trackers.values():
+        if t["key"] not in dst.trackers:
+            entity(t["key"], "tracker", t["name"], [
+                ("tracker_kind", t["kind"]), ("tracker_unit", t["unit"]), ("tracker_target", t["target"]),
+                ("tracker_target_value", t["target_value"]), ("tracker_every", t["every"]),
+                ("tracker_every_n", t["every_n"]), ("tracker_state", t["state"]), ("tracker_since", at_noon(t["since"])),
+                ("tracker_until", at_noon(t["until"])), ("tracker_why", t["why"]), ("tracker_seq", t["seq"])])
+    for c in src.collections.values():
+        if c["key"] not in dst.collections:
+            entity(c["key"], "collection", c["name"], [
+                ("coll_statuses", "|".join(c["statuses"]) or None), ("coll_done_status", c["done_status"]),
+                ("coll_rating", 1 if c["rating"] else 0), ("coll_state", c["state"]), ("coll_seq", c["seq"]),
+                ("coll_why", c["why"])])
+    for i in src.items.values():
+        if i["key"] not in dst.items:
+            entity(i["key"], "item", i["title"], [
+                ("in_collection", i["collection"]), ("item_status", i["status"]), ("item_rating", i["rating"]),
+                ("item_done_on", at_noon(i["done_on"])), ("item_note", i["note"]), ("item_state", i["state"]),
+                ("item_added_on", at_noon(i["added_on"]))])
+    have = {r["key"] for recs in dst.records.values() for r in recs.values()} | {n["key"] for n in dst.notes} | \
+        {r["key"] for r in dst.reflections.values()}
+    for tracker, recs in src.records.items():
+        for day, r in recs.items():
+            if r["key"] not in have:
+                t = src.trackers[tracker]
+                events.append({"key": r["key"], "type": "tracker_logged", "occurred_at": noon(day, now.tzinfo),
+                               "summary": f"{t['name']}: {show(t, r['value'])}",
+                               "attributes": {"tracker_value": r["value"], "late_days": 1 if r["late"] else 0},
+                               "links": [{"predicate": "about_tracker", "entity": tracker}]})
+    for n in src.notes:
+        if n["key"] not in have:
+            events.append({"key": n["key"], "type": "note_written", "occurred_at": noon(n["day"], now.tzinfo),
+                           "summary": n["text"][:150],
+                           "attributes": {"note_text": n["text"], "late_days": 1 if n["late"] else 0},
+                           "links": [{"predicate": "of_note_type", "entity": type_map[n["type"]]}]})
+    for r in src.reflections.values():
+        if r["key"] not in have:
+            attrs = {"reflect_month": r["month"], "went_well": r["went_well"], "went_wrong": r["went_wrong"],
+                     "intention": r["intention"], "highlights": "\n".join(r["highlights"]) or None}
+            events.append({"key": r["key"], "type": "month_reflected", "occurred_at": noon(
+                date.fromisoformat(r["saved_on"]), now.tzinfo), "summary": f"Reflection of {r['month']}",
+                "attributes": {k: v for k, v in attrs.items() if v}})
+    for e in events:
+        copied[e["type"]] = copied.get(e["type"], 0) + 1
+    if entities:
+        mem.write(args.by, args.source or "Journal copied from another memory", "helper_command",
+                  entities=entities, facts=facts)
+    if events:
+        mem.write(args.by, args.source or "Journal copied from another memory", "helper_command", events=events)
+    return {"ok": True, "copied": copied, "already_here_or_empty": not copied,
+            "note": "The other memory was not changed. Check this one (trackers, notes, collections) before retiring it."}
 
 
 # -- CLI ------------------------------------------------------------------------------------
@@ -874,12 +1421,69 @@ def main() -> None:
     s.add_argument("--went-well")
     s.add_argument("--went-wrong")
     s.add_argument("--intention")
+    s.add_argument("--highlight", action="append", help="a moment of the month the owner chose, repeatable")
     cmd("brief", by=False, source=False)
+    s = cmd("note")
+    s.add_argument("--date", help="YYYY-MM-DD (today by default)")
+    s.add_argument("--type", help="note type key, name or symbol")
+    s.add_argument("--text", help="the owner's words")
+    s.add_argument("--file", help='several notes: JSON list [{"type", "text"}], or - for stdin')
+    s = cmd("notes", by=False, source=False)
+    s.add_argument("--date")
+    s.add_argument("--month", help="YYYY-MM")
+    s.add_argument("--type")
+    s.add_argument("--search", help="words that must all appear (accents and case don't matter)")
+    s.add_argument("--limit", type=int, default=100, help="the most recent N (0 = all)")
+    s = cmd("retype")
+    s.add_argument("--key", required=True)
+    s.add_argument("--type", required=True)
+    s = cmd("unnote", source=False)
+    s.add_argument("--key", required=True)
+    s.add_argument("--reason", required=True, help="why, in the owner's words")
+    s = cmd("note-type")
+    s.add_argument("--key", required=True)
+    s.add_argument("--name")
+    s.add_argument("--symbol")
+    s.add_argument("--purpose", help="what this type is for, so the agent can recognize it")
+    s.add_argument("--state", help=" | ".join(STATES))
+    s = cmd("note-types", by=False, source=False)
+    s.add_argument("--all", action="store_true", help="include retired types")
+    s = cmd("collection")
+    s.add_argument("--key", required=True)
+    s.add_argument("--name")
+    s.add_argument("--statuses", help='comma-separated, in order, e.g. "to read, reading, read"; none to remove')
+    s.add_argument("--done", help="the status that means finished")
+    s.add_argument("--rating", help="yes | no: items take a 1-5 rating")
+    s.add_argument("--why", help="what the collection is for, in the owner's words")
+    s.add_argument("--state", help=" | ".join(STATES))
+    s = cmd("collections", by=False, source=False)
+    s.add_argument("--all", action="store_true", help="include retired collections")
+    s = cmd("item")
+    s.add_argument("--collection", required=True)
+    s.add_argument("--title")
+    s.add_argument("--key", help="item:<...>, to change an item (or its title)")
+    s.add_argument("--status")
+    s.add_argument("--rating", type=int)
+    s.add_argument("--date", help="YYYY-MM-DD it was finished (with the finished status)")
+    s.add_argument("--note")
+    s.add_argument("--remove", action="store_true", help="stop showing it (it stays in the file)")
+    s.add_argument("--reason", help="why, in the owner's words")
+    s = cmd("items", by=False, source=False)
+    s.add_argument("--collection", required=True)
+    s.add_argument("--status")
+    s.add_argument("--year", help="finished in YYYY")
+    s.add_argument("--month", help="finished in YYYY-MM")
+    s.add_argument("--search")
+    s.add_argument("--all", action="store_true", help="include removed items")
+    s = cmd("copy-from")
+    s.add_argument("--from-db", required=True, help="path of the other memory (.memory/memory.sqlite)")
     args = p.parse_args()
 
     commands = {"setup": cmd_setup, "now": cmd_now, "tracker": cmd_tracker, "trackers": cmd_trackers, "log": cmd_log,
                 "unlog": cmd_unlog, "day": cmd_day, "grid": cmd_grid, "stats": cmd_stats, "reflect": cmd_reflect,
-                "brief": cmd_brief}
+                "brief": cmd_brief, "note": cmd_note, "notes": cmd_notes, "retype": cmd_retype, "unnote": cmd_unnote,
+                "note-type": cmd_note_type, "note-types": cmd_note_types, "collection": cmd_collection,
+                "collections": cmd_collections, "item": cmd_item, "items": cmd_items, "copy-from": cmd_copy_from}
     try:
         tz = parse_offset(args.tz)
         if args.now:

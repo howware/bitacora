@@ -1,5 +1,5 @@
 {
-  "seed_version": "1",
+  "seed_version": "2",
   "predicates": [
     {"id": "tracker_kind", "value_type": "text", "cardinality": "one", "label": "Kind", "description": "quantity (a whole number in the tracker's unit), yesno or scale (1 to 5)"},
     {"id": "tracker_unit", "value_type": "text", "cardinality": "one", "label": "Unit", "description": "The whole unit a quantity tracker's values are stored in (minute, glass, ml...), as the owner chose it"},
@@ -18,16 +18,46 @@
     {"id": "reflect_month", "value_type": "text", "cardinality": "one", "label": "Month", "description": "The month a reflection is about, YYYY-MM"},
     {"id": "went_well", "value_type": "text", "cardinality": "one", "label": "What went well", "description": "The owner's words"},
     {"id": "went_wrong", "value_type": "text", "cardinality": "one", "label": "What didn't", "description": "The owner's words"},
-    {"id": "intention", "value_type": "text", "cardinality": "one", "label": "Intention", "description": "The owner's intention for the next month, in their words"}
+    {"id": "intention", "value_type": "text", "cardinality": "one", "label": "Intention", "description": "The owner's intention for the next month, in their words"},
+    {"id": "note_symbol", "value_type": "text", "cardinality": "one", "label": "Symbol", "description": "The signifier shown before a note of this type (–, ○, !, *, •...)"},
+    {"id": "note_purpose", "value_type": "text", "cardinality": "one", "label": "What it is for", "description": "What notes of this type are, so the agent can recognize them"},
+    {"id": "note_state", "value_type": "text", "cardinality": "one", "label": "State", "description": "active or retired"},
+    {"id": "note_seq", "value_type": "integer", "cardinality": "one", "label": "Order", "description": "Order of the type in lists"},
+    {"id": "note_text", "value_type": "text", "cardinality": "one", "label": "Note", "description": "The note, in the owner's words"},
+    {"id": "of_note_type", "value_type": "entity", "cardinality": "one", "label": "Type", "description": "The type of a note"},
+    {"id": "coll_statuses", "value_type": "text", "cardinality": "one", "label": "Statuses", "description": "The collection's statuses in order, separated by |"},
+    {"id": "coll_done_status", "value_type": "text", "cardinality": "one", "label": "Finished status", "description": "The status that means an item is finished"},
+    {"id": "coll_rating", "value_type": "integer", "cardinality": "one", "label": "Rates items", "description": "1 if the collection's items take a 1-5 rating, 0 if not"},
+    {"id": "coll_state", "value_type": "text", "cardinality": "one", "label": "State", "description": "active or retired"},
+    {"id": "coll_seq", "value_type": "integer", "cardinality": "one", "label": "Order", "description": "Order in which the collection was created"},
+    {"id": "coll_why", "value_type": "text", "cardinality": "one", "label": "What it is for", "description": "What the collection is for, in the owner's words"},
+    {"id": "in_collection", "value_type": "entity", "cardinality": "one", "label": "Collection", "description": "The collection an item belongs to"},
+    {"id": "item_status", "value_type": "text", "cardinality": "one", "label": "Status", "description": "One of its collection's statuses"},
+    {"id": "item_rating", "value_type": "integer", "cardinality": "one", "label": "Rating", "description": "1 to 5"},
+    {"id": "item_done_on", "value_type": "datetime", "cardinality": "one", "label": "Finished on", "description": "Day the item reached the finished status, at noon local time"},
+    {"id": "item_note", "value_type": "text", "cardinality": "one", "label": "Note", "description": "A short note about the item, in the owner's words"},
+    {"id": "item_state", "value_type": "text", "cardinality": "one", "label": "State", "description": "active or removed (a removed item stops showing and stays in the file)"},
+    {"id": "item_added_on", "value_type": "datetime", "cardinality": "one", "label": "Added on", "description": "Day the item was added, at noon local time"},
+    {"id": "highlights", "value_type": "text", "cardinality": "one", "label": "Moments of the month", "description": "The moments the owner chose in the reflection, one per line"}
   ],
   "entities": [
     {"key": "settings:bitacora", "type": "settings", "name": "bitacora settings"}
+  ],
+  "note_types": [
+    {"key": "note_type:note", "name": "Note", "symbol": "–", "purpose": "Something that happened or a thought; the default when no other type fits"},
+    {"key": "note_type:event", "name": "Event", "symbol": "○", "purpose": "An event: something that took place at a moment, out of the routine (a wedding, a trip, a visit)"},
+    {"key": "note_type:idea", "name": "Idea", "symbol": "!", "purpose": "An idea or an inspiration"},
+    {"key": "note_type:important", "name": "Important", "symbol": "*", "purpose": "Something important to remember"},
+    {"key": "note_type:task", "name": "Task", "symbol": "•", "purpose": "Something to do; only when the todo howware is not in this memory"}
   ],
   "vocabularies": {
     "tracker_kind": ["quantity", "yesno", "scale"],
     "tracker_target": ["at_least", "at_most", "yes"],
     "tracker_every": ["day", "week", "days"],
-    "tracker_state": ["active", "retired"]
+    "tracker_state": ["active", "retired"],
+    "note_state": ["active", "retired"],
+    "coll_state": ["active", "retired"],
+    "item_state": ["active", "removed"]
   },
-  "high_volume_event_types": ["tracker_logged"]
+  "high_volume_event_types": ["tracker_logged", "note_written"]
 }

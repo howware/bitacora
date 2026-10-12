@@ -1,8 +1,8 @@
 {
   "howware": "0.2",
   "name": "bitacora",
-  "version": "0.1.0",
-  "description": "Your habit trackers and a monthly reflection, like a bullet journal without an app: say what you did, and your agent keeps the record, the streaks and the patterns. Trackers and goals are the owner's, and change over time.",
+  "version": "0.2.0",
+  "description": "Your journal, like a bullet journal without an app: habit trackers, notes of the day, collections and a monthly reflection. Say what you did and what happened; your agent keeps it exact. Trackers, types of note and collections are the owner's, and change over time.",
   "license": "Apache-2.0",
   "languages": [
     "en",
@@ -29,21 +29,23 @@
   "memory": {
     "kind": "local-sqlite",
     "append_only": true,
-    "seed_version": "1"
+    "seed_version": "2"
   },
   "privacy": {
     "stays_local": [
-      "the memory file with the trackers, every day's records and the monthly reflections (the agent queries it and sees the answers)"
+      "the memory file with the trackers, every day's records, the notes, the collections and the monthly reflections (the agent queries it and sees the answers)"
     ],
     "agent_sees": [
       "the trackers, their goals and the reasons the owner gave for them",
       "the recorded values, streaks and statistics, when it queries them",
+      "the notes' text and the collections' items, when it queries or searches them",
       "the text of the monthly reflections",
       "everything the owner types in the conversation"
     ],
     "cannot_guarantee": [
       "what the agent sees leaves the computer for the AI provider, under its terms; habits like sleep can be health-related data",
       "the memory file is not encrypted",
+      "a removed note or item stops showing but stays in the memory file, marked as voided",
       "there are no notifications or reminders: the reflection is offered only when the owner opens a conversation",
       "the protocol tells the agent not to give health advice, but an AI's replies can't be guaranteed; the patterns it shows are coincidences in the owner's record, not causes"
     ]
