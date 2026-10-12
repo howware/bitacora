@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/howware/bitacora/actions/workflows/ci.yml"><img src="https://github.com/howware/bitacora/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/versión-0.2.0-blue" alt="Versión 0.2.0">
+  <img src="https://img.shields.io/badge/versión-0.2.1-blue" alt="Versión 0.2.1">
   <a href="https://howware.org/es/"><img src="https://img.shields.io/badge/howware-0.2-5a45d6" alt="howware 0.2"></a>
   <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/licencia-Apache%202.0-green" alt="Apache 2.0">
@@ -76,7 +76,8 @@ gym, tu ánimo promedió 3.8 contra 2.9») son eso, coincidencias en tu registro
 git clone https://github.com/howware/long-term-memory-for-AI
 python long-term-memory-for-AI/tools/install_skill.py --target ~/.claude/skills/project-memory
 git clone https://github.com/howware/bitacora
-python bitacora/tools/install_skill.py
+python bitacora/tools/install_skill.py                                       # Claude Code
+python bitacora/tools/install_skill.py --target ~/.codex/skills/bitacora      # Codex
 ```
 
 Crea una carpeta para tu bitácora, abre ahí Claude Code (agrega a su `CLAUDE.md` la instrucción de memoria

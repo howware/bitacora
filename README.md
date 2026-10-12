@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/howware/bitacora/actions/workflows/ci.yml"><img src="https://github.com/howware/bitacora/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/version-0.2.0-blue" alt="Version 0.2.0">
+  <img src="https://img.shields.io/badge/version-0.2.1-blue" alt="Version 0.2.1">
   <a href="https://howware.org"><img src="https://img.shields.io/badge/howware-0.2-5a45d6" alt="howware 0.2"></a>
   <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="Apache 2.0">

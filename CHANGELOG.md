@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1
+
+- **Fixed:** recording a day again after `unlog`, or writing a note again after `unnote`, said it was created but
+  stored nothing (the voided event's key was reused and the memory ignored it). Present since 0.1.0. Such writes
+  now go under a fresh key. The same protection covers `retype` and `reflect --save`.
+- A note said again after a `retype` is recognized as the same note (`unchanged`, with its current type).
+- `collection --statuses none` removes a collection's statuses, as documented; it failed before.
+- Spanish README: the Codex install line, as in English.
+
 ## 0.2.0
 
 - **Notes of the day**, in the owner's words, each with a type and its symbol. The types start as the bullet

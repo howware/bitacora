@@ -14,7 +14,7 @@ Commands (JSON on stdout, diagnostics on stderr, documented exit codes):
   note       write notes of a day, each with its type (the bullet journal's signifiers), in the owner's words
   notes      notes by date, month, type or text (accent- and case-insensitive)
   retype     change a note's type;  unnote: void a note (it stops showing, and stays in the file)
-  note-type  create or change a type of note: name, symbol, what it is for, state
+  note-type  create or change a type of note: name, symbol, what it is for, state;  note-types: all of them
   collection create or change a collection: its statuses, the one that means finished, whether it rates
   item       add or change an element of a collection (status, rating, finished date, note), or remove it
   items      a collection's elements with counts, by status, period or text;  collections: all of them
@@ -34,6 +34,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import time
@@ -43,7 +44,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 HERE = Path(__file__).resolve().parent
 SEED = HERE / "seed.json"
 MIN_MEMORY = (0, 4, 0)
@@ -136,6 +137,24 @@ class Memory:
                                                    "captured_at": "now"},
                                         "performed_by": by, **sections})
 
+    def write_new(self, by: str, content: str, events: list[dict], now: datetime) -> dict[str, str]:
+        """Writes events that must be new. A key the memory already has belongs to an event voided earlier (removed
+        or corrected), so it is written again under a fresh key. Returns the key each event was stored under."""
+        stored = {e["key"]: e["key"] for e in events}
+        pending = events
+        for _ in range(3):
+            result = self.write(by, content, events=pending)
+            existing = set((result.get("events") or {}).get("existing") or [])
+            if not existing:
+                return stored
+            stamp = f"{now.strftime('%Y%m%d%H%M%S')}{secrets.token_hex(3)}"   # new on purpose: never reused
+            pending = []
+            for e in events:
+                if stored[e["key"]] in existing:
+                    stored[e["key"]] = f"{e['key']}_n{stamp}"
+                    pending.append({**e, "key": stored[e["key"]]})
+        raise ToolError("The memory kept refusing new keys for these events.", MEMORY_ERROR)
+
 
 # -- exact helpers ------------------------------------------------------------------------
 def parse_offset(text: str) -> timezone:
@@ -193,6 +212,11 @@ def norm(text: str) -> str:
     """Accent-, case- and spacing-insensitive form, for searching and for note keys."""
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     return " ".join(text.casefold().split())
+
+
+def base_key(key: str) -> str:
+    """A note's key without the suffix of a retype or a rewrite: NOTE_<day>_<hash>."""
+    return "_".join(key.split("_")[:3])
 
 
 def note_key(day: date, text: str) -> str:
@@ -826,7 +850,7 @@ def cmd_log(mem: Memory, args, now: datetime) -> dict:
     for key in voids:
         mem.run("void", "--event", key, "--reason", args.source or "Corrected by the owner", "--by", args.by)
     if events:
-        mem.write(args.by, args.source or f"Record of {day.isoformat()}", events=events)
+        mem.write_new(args.by, args.source or f"Record of {day.isoformat()}", events, now)
     after = Journal(mem, now.tzinfo, now.date())
     for r in results:
         r["streak"] = after.streak(after.trackers[r["tracker"]])
@@ -917,10 +941,10 @@ def cmd_reflect(mem: Memory, args, now: datetime) -> dict:
         if prev:
             mem.run("void", "--event", prev["key"], "--reason", args.source or "Reflection rewritten", "--by", args.by)
             key += f"_r{now.strftime('%Y%m%d%H%M%S')}"
-        mem.write(args.by, args.source or f"Reflection of {month}", events=[{
+        mem.write_new(args.by, args.source or f"Reflection of {month}", [{
             "key": key, "type": "month_reflected", "occurred_at": now.isoformat(timespec="seconds"),
             "summary": f"Reflection of {month}",
-            "attributes": {"reflect_month": month, **{k: v for k, v in fields.items() if v}}}])
+            "attributes": {"reflect_month": month, **{k: v for k, v in fields.items() if v}}}], now)
         return {"ok": True, "month": month, "saved": True, "rewritten": bool(prev)}
     s = stats_for(mem, now, month, first, last)
     j: Journal = s.pop("journal")
@@ -999,7 +1023,7 @@ def cmd_note(mem: Memory, args, now: datetime) -> dict:
         wanted = [(args.type, args.text)]
     else:
         raise ToolError("Give --type and --text, or --file with several notes.")
-    existing = {n["key"]: n for n in j.notes}
+    existing = {base_key(n["key"]): n for n in j.notes}
     late = (now.date() - day).days
     events, out, seen = [], [], set()
     for type_ref, text in wanted:
@@ -1025,7 +1049,9 @@ def cmd_note(mem: Memory, args, now: datetime) -> dict:
         out.append({"key": key, "date": day.isoformat(), "symbol": t["symbol"], "type": t["name"], "text": text,
                     "created": True})
     if events:
-        mem.write(args.by, args.source or f"Notes of {day.isoformat()}", events=events)
+        stored = mem.write_new(args.by, args.source or f"Notes of {day.isoformat()}", events, now)
+        for o in out:
+            o["key"] = stored.get(o["key"], o["key"])
     return {"ok": True, "date": day.isoformat(), "weekday": WEEKDAYS[day.weekday()], "late_days": late, "notes": out}
 
 
@@ -1044,11 +1070,12 @@ def cmd_retype(mem: Memory, args, now: datetime) -> dict:
         return {"ok": True, "unchanged": True, **j.note_view(n)}
     mem.run("void", "--event", n["key"], "--reason", args.source or f"Type changed to {t['name']}", "--by", args.by)
     key = f"{note_key(n['day'], n['text'])}_t{now.strftime('%Y%m%d%H%M%S')}"
-    mem.write(args.by, args.source or f"Type changed to {t['name']}", events=[{
+    event = {
         "key": key, "type": "note_written", "occurred_at": noon(n["day"], now.tzinfo),
         "summary": f"{t['symbol']} {n['text'][:150]}",
         "attributes": {"note_text": n["text"], "late_days": 1 if n["late"] else 0},
-        "links": [{"predicate": "of_note_type", "entity": t["key"]}]}])
+        "links": [{"predicate": "of_note_type", "entity": t["key"]}]}
+    key = mem.write_new(args.by, args.source or f"Type changed to {t['name']}", [event], now)[key]
     return {"ok": True, "key": key, "date": n["day"].isoformat(), "symbol": t["symbol"], "type": t["name"],
             "text": n["text"]}
 
@@ -1129,10 +1156,13 @@ def cmd_collection(mem: Memory, args, now: datetime) -> dict:
     current = j.collections.get(key)
     if not current and not args.name:
         raise ToolError(f"New collection {key}: give it a --name.")
-    statuses = parse_statuses(args.statuses) if args.statuses else (current["statuses"] if current else [])
-    done_status = args.done.strip() if args.done else (current["done_status"] if current else None)
     if args.statuses == "none":
+        if args.done:
+            raise ToolError("--statuses none removes the statuses; it doesn't take --done.")
         statuses, done_status = [], None
+    else:
+        statuses = parse_statuses(args.statuses) if args.statuses else (current["statuses"] if current else [])
+        done_status = args.done.strip() if args.done else (current["done_status"] if current else None)
     if statuses and done_status not in statuses:
         raise ToolError(f"--done must be one of the statuses ({', '.join(statuses)}): the one that means finished.")
     if not statuses and args.done:

@@ -144,6 +144,17 @@ class ToolTest(unittest.TestCase):
         self.assertEqual(self.log("2026-09-02", "sleep=7.25h")["entries"][0]["value"], "7 h 15 min")
         self.log("2026-09-03", "sleep=6:75", code=2)
 
+    def test_a_voided_day_can_be_recorded_again(self):
+        self.trackers()
+        for value in ("yes", "no"):
+            self.log("2026-09-01", "gym=yes")
+            self.tool("unlog", "--tracker", "gym", "--date", "2026-09-01", "--reason", "x", "--by", BY,
+                      now="2026-09-01T21:00")
+            self.log("2026-09-01", f"gym={value}")
+            self.assertEqual(self.tool("day", "--date", "2026-09-01")["entries"][1]["value"], value)
+            self.tool("unlog", "--tracker", "gym", "--date", "2026-09-01", "--reason", "x", "--by", BY,
+                      now="2026-09-01T21:00")
+
     def test_unlog_voids_the_record(self):
         self.trackers()
         self.log("2026-09-01", "gym=yes")
@@ -300,6 +311,19 @@ class ToolTest(unittest.TestCase):
         self.assertEqual(self.tool("notes", "--date", "2026-09-01")["total"], 0)
         self.tool("unnote", "--key", moved["key"], "--reason", "x", "--by", BY, code=2)
 
+    def test_a_removed_or_retyped_note_said_again(self):
+        key = self.note("2026-09-01", "note", "hola")["notes"][0]["key"]
+        self.tool("unnote", "--key", key, "--reason", "x", "--by", BY)
+        again = self.note("2026-09-01", "note", "Hola")["notes"][0]
+        self.assertTrue(again["created"])
+        self.assertNotEqual(again["key"], key)
+        self.assertEqual(self.tool("notes", "--date", "2026-09-01")["total"], 1)
+        self.tool("retype", "--key", again["key"], "--type", "idea", "--by", BY)
+        third = self.note("2026-09-01", "note", "hola")["notes"][0]
+        self.assertTrue(third["unchanged"])
+        self.assertEqual(third["type"], "Idea")
+        self.assertEqual(self.tool("notes", "--date", "2026-09-01")["total"], 1)
+
     def test_notes_refusals_and_bulk(self):
         self.note("2026-09-05", "note", "x", now="2026-09-02T09:00", code=2)     # future
         self.note("2026-09-01", "nothing", "x", code=2)
@@ -343,6 +367,10 @@ class ToolTest(unittest.TestCase):
                   code=2)                                           # Rayuela would be left with a lost status
         names = [c["name"] for c in self.tool("collections")["collections"]]
         self.assertEqual(names, ["Libros", "Ideas de negocio"])
+        self.tool("collection", "--key", "books", "--statuses", "none", "--by", BY, code=2)    # Rayuela has one
+        self.tool("collection", "--key", "ideas", "--statuses", "a, b", "--done", "b", "--by", BY)
+        cleared = self.tool("collection", "--key", "ideas", "--statuses", "none", "--by", BY)
+        self.assertEqual((cleared["statuses"], cleared["done_status"]), ([], None))
 
     def test_items_status_finish_date_rating_and_counts(self):
         self.books()

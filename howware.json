@@ -1,7 +1,7 @@
 {
   "howware": "0.2",
   "name": "bitacora",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Your journal, like a bullet journal without an app: habit trackers, notes of the day, collections and a monthly reflection. Say what you did and what happened; your agent keeps it exact. Trackers, types of note and collections are the owner's, and change over time.",
   "license": "Apache-2.0",
   "languages": [
