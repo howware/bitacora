@@ -1,0 +1,33 @@
+{
+  "seed_version": "1",
+  "predicates": [
+    {"id": "tracker_kind", "value_type": "text", "cardinality": "one", "label": "Kind", "description": "quantity (a whole number in the tracker's unit), yesno or scale (1 to 5)"},
+    {"id": "tracker_unit", "value_type": "text", "cardinality": "one", "label": "Unit", "description": "The whole unit a quantity tracker's values are stored in (minute, glass, ml...), as the owner chose it"},
+    {"id": "tracker_target", "value_type": "text", "cardinality": "one", "label": "Target", "description": "at_least, at_most or yes: what makes a day count as done"},
+    {"id": "tracker_target_value", "value_type": "integer", "cardinality": "one", "label": "Target value", "description": "The threshold of at_least or at_most, in the tracker's unit"},
+    {"id": "tracker_every", "value_type": "text", "cardinality": "one", "label": "How often", "description": "day (every day), week (N done days per Monday-Sunday week) or days (at most N days between done days)"},
+    {"id": "tracker_every_n", "value_type": "integer", "cardinality": "one", "label": "N", "description": "Done days per week, or most days between done days"},
+    {"id": "tracker_state", "value_type": "text", "cardinality": "one", "label": "State", "description": "active or retired (a retired tracker keeps its history)"},
+    {"id": "tracker_since", "value_type": "datetime", "cardinality": "one", "label": "Since", "description": "Day the tracker started, at noon local time"},
+    {"id": "tracker_until", "value_type": "datetime", "cardinality": "one", "label": "Until", "description": "Day the tracker was retired, at noon local time"},
+    {"id": "tracker_why", "value_type": "text", "cardinality": "one", "label": "Why", "description": "Why the owner tracks it, in their words"},
+    {"id": "tracker_seq", "value_type": "integer", "cardinality": "one", "label": "Order", "description": "Order in which the tracker was created, for the grid"},
+    {"id": "tracker_value", "value_type": "integer", "cardinality": "one", "label": "Value", "description": "A day's value in the tracker's unit (tracker_unit); yes/no as 1/0; scale 1-5"},
+    {"id": "late_days", "value_type": "integer", "unit": "day", "cardinality": "one", "label": "Written later", "description": "Days between the recorded day and the day it was written; 0 = written on the day"},
+    {"id": "about_tracker", "value_type": "entity", "cardinality": "one", "label": "Tracker", "description": "The tracker a record is about"},
+    {"id": "reflect_month", "value_type": "text", "cardinality": "one", "label": "Month", "description": "The month a reflection is about, YYYY-MM"},
+    {"id": "went_well", "value_type": "text", "cardinality": "one", "label": "What went well", "description": "The owner's words"},
+    {"id": "went_wrong", "value_type": "text", "cardinality": "one", "label": "What didn't", "description": "The owner's words"},
+    {"id": "intention", "value_type": "text", "cardinality": "one", "label": "Intention", "description": "The owner's intention for the next month, in their words"}
+  ],
+  "entities": [
+    {"key": "settings:bitacora", "type": "settings", "name": "bitacora settings"}
+  ],
+  "vocabularies": {
+    "tracker_kind": ["quantity", "yesno", "scale"],
+    "tracker_target": ["at_least", "at_most", "yes"],
+    "tracker_every": ["day", "week", "days"],
+    "tracker_state": ["active", "retired"]
+  },
+  "high_volume_event_types": ["tracker_logged"]
+}

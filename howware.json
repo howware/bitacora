@@ -1,0 +1,51 @@
+{
+  "howware": "0.2",
+  "name": "bitacora",
+  "version": "0.1.0",
+  "description": "Your habit trackers and a monthly reflection, like a bullet journal without an app: say what you did, and your agent keeps the record, the streaks and the patterns. Trackers and goals are the owner's, and change over time.",
+  "license": "Apache-2.0",
+  "languages": [
+    "en",
+    "es"
+  ],
+  "hosts": [
+    "claude-code"
+  ],
+  "skill": "skill/bitacora",
+  "adapters": [
+    {
+      "name": "project-memory",
+      "version": ">=0.4.0",
+      "url": "https://github.com/howware/long-term-memory-for-AI"
+    }
+  ],
+  "tools": [
+    {
+      "name": "bitacora.py",
+      "network": false,
+      "dependencies": []
+    }
+  ],
+  "memory": {
+    "kind": "local-sqlite",
+    "append_only": true,
+    "seed_version": "1"
+  },
+  "privacy": {
+    "stays_local": [
+      "the memory file with the trackers, every day's records and the monthly reflections (the agent queries it and sees the answers)"
+    ],
+    "agent_sees": [
+      "the trackers, their goals and the reasons the owner gave for them",
+      "the recorded values, streaks and statistics, when it queries them",
+      "the text of the monthly reflections",
+      "everything the owner types in the conversation"
+    ],
+    "cannot_guarantee": [
+      "what the agent sees leaves the computer for the AI provider, under its terms; habits like sleep can be health-related data",
+      "the memory file is not encrypted",
+      "there are no notifications or reminders: the reflection is offered only when the owner opens a conversation",
+      "the protocol tells the agent not to give health advice, but an AI's replies can't be guaranteed; the patterns it shows are coincidences in the owner's record, not causes"
+    ]
+  }
+}
